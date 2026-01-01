@@ -289,11 +289,11 @@ impl Game {
             .raycast_first_solid(sx, sy, sz, dx, dy, dz, 20.0)
             .map(|(x, y, z, _b, _n)| (x, y, z))
     }
-   
+
     pub fn mesh_loaded_chunks_if_dirty(&mut self) -> Option<(Vec<Vertex>, Vec<u32>)> {
         let cps = self.world.chunk_positions();
 
-        // Nur dirty Chunks neu meshen (oder wenn noch nicht im Cache)
+        // 1) Dirty Chunks neu meshen (oder wenn noch nicht im Cache)
         let mut any_changed = false;
 
         for &cp in &cps {
@@ -307,11 +307,14 @@ impl Game {
             }
         }
 
+        // Optional: Cache aufräumen, falls Chunks entfernt werden (bei dir aktuell nicht)
+        // self.chunk_mesh_cache.retain(|cp, _| self.world.has_chunk(*cp));
+
         if !any_changed {
             return None;
         }
 
-        // Aus Cache ein großes Mesh bauen
+        // 2) Aus Cache ein Gesamtmesh bauen
         let mut verts: Vec<Vertex> = Vec::new();
         let mut inds: Vec<u32> = Vec::new();
 

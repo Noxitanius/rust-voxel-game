@@ -104,7 +104,7 @@ impl World {
             ch.set_local(lx, ly, lz, b);
         }
 
-        // Wenn an einer Chunk-Kante geändert wurde, Nachbar-Chunk ebenfalls dirty
+        // Wenn an Chunk-Kante geändert → Nachbarn dirty
         if lx == 0 {
             self.mark_dirty(ChunkPos { cx: cx - 1, cy, cz });
         } else if lx == CHUNK_SIZE - 1 {
