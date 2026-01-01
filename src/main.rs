@@ -51,19 +51,19 @@ fn main() {
                         window.request_redraw();
                     }
 
-                    WindowEvent::RedrawRequested => {
-                        match gfx.render() {
-                            Ok(_) => {}
-                            Err(wgpu::SurfaceError::Lost) => gfx.resize(gfx.size),
-                            Err(wgpu::SurfaceError::OutOfMemory) => elwt.exit(),
-                            Err(_) => {}
-                        }
-                    }
+                    WindowEvent::RedrawRequested => match gfx.render() {
+                        Ok(_) => {}
+                        Err(wgpu::SurfaceError::Lost) => gfx.resize(gfx.size),
+                        Err(wgpu::SurfaceError::OutOfMemory) => elwt.exit(),
+                        Err(_) => {}
+                    },
 
                     WindowEvent::KeyboardInput { event, .. } => {
                         let down = event.state == ElementState::Pressed;
                         match event.physical_key {
-                            PhysicalKey::Code(KeyCode::Escape) if down => input.toggle_mouse_lock = true,
+                            PhysicalKey::Code(KeyCode::Escape) if down => {
+                                input.toggle_mouse_lock = true
+                            }
                             PhysicalKey::Code(KeyCode::Space) if down => input.jump = true,
 
                             PhysicalKey::Code(KeyCode::KeyW) => input.move_fwd = down,
@@ -117,6 +117,9 @@ fn main() {
 
                         input.clear_one_shots();
                         next_tick += tick_dt;
+
+                        let (pos, dir) = game.camera_pos_dir();
+                        gfx.set_camera(pos, dir);
 
                         window.request_redraw();
                     }

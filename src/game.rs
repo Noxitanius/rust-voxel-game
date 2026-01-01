@@ -283,4 +283,7 @@ impl Game {
             .raycast_first_solid(sx, sy, sz, dx, dy, dz, 20.0)
             .map(|(x, y, z, _b, _n)| (x, y, z))
     }
+    pub fn camera_pos_dir(&self) -> ((f32, f32, f32), (f32, f32, f32)) {
+        (self.player.eye_pos(), self.player.dir())
+    }
 }

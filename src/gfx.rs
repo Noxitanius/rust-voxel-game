@@ -97,14 +97,13 @@ impl CameraUniform {
     }
 }
 
-fn build_view_proj(aspect: f32) -> Mat4 {
-    // “Kamera” fest, nur für Test
-    let eye = Vec3::new(3.0, 2.0, 5.0);
-    let target = Vec3::new(0.0, 0.0, 0.0);
+fn build_view_proj_from(pos: Vec3, dir: Vec3, aspect: f32) -> Mat4 {
+    let eye = pos;
+    let target = pos + dir;
     let up = Vec3::Y;
 
     let view = Mat4::look_at_rh(eye, target, up);
-    let proj = Mat4::perspective_rh(45f32.to_radians(), aspect, 0.1, 100.0);
+    let proj = Mat4::perspective_rh(45f32.to_radians(), aspect, 0.1, 200.0);
     proj * view
 }
 
@@ -230,8 +229,13 @@ impl Gfx {
 
         // ----- Camera uniform -----
         let mut cam_u = CameraUniform::new();
-        cam_u.view_proj =
-            build_view_proj(config.width as f32 / config.height as f32).to_cols_array_2d();
+        let aspect = config.width as f32 / config.height as f32;
+        cam_u.view_proj = build_view_proj_from(
+            Vec3::new(3.0, 2.0, 5.0),
+            Vec3::new(-0.5, -0.2, -1.0),
+            aspect,
+        )
+        .to_cols_array_2d();
 
         let camera_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("camera buffer"),
@@ -348,8 +352,34 @@ impl Gfx {
 
         // Kamera-Aspect aktualisieren
         let mut cam_u = CameraUniform::new();
-        cam_u.view_proj = build_view_proj(self.config.width as f32 / self.config.height as f32)
-            .to_cols_array_2d();
+        let aspect = self.config.width as f32 / self.config.height as f32;
+        cam_u.view_proj = build_view_proj_from(
+            Vec3::new(3.0, 2.0, 5.0),
+            Vec3::new(-0.5, -0.2, -1.0),
+            aspect,
+        )
+        .to_cols_array_2d();
+
+        self.queue
+            .write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&cam_u));
+    }
+
+    pub fn set_camera(&mut self, pos: (f32, f32, f32), dir: (f32, f32, f32)) {
+        let pos = Vec3::new(pos.0, pos.1, pos.2);
+        let mut dir = Vec3::new(dir.0, dir.1, dir.2);
+
+        // Schutz: nie Nullrichtung
+        if dir.length_squared() < 1e-6 {
+            dir = Vec3::new(0.0, 0.0, -1.0);
+        } else {
+            dir = dir.normalize();
+        }
+
+        let aspect = self.config.width as f32 / self.config.height as f32;
+
+        let mut cam_u = CameraUniform::new();
+        cam_u.view_proj = build_view_proj_from(pos, dir, aspect).to_cols_array_2d();
+
         self.queue
             .write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&cam_u));
     }
