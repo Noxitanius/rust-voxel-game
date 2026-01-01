@@ -1,14 +1,19 @@
 use crate::block::Block;
+use crate::chunk::ChunkPos;
 use crate::command::Command;
 use crate::input::InputState;
+use crate::mesh::Vertex;
 use crate::player::Player;
+use crate::voxel_mesher::mesh_chunk;
 use crate::world::World;
+use std::collections::HashMap;
 
 pub struct Game {
     tick: u64,
     world: World,
     player: Player,
     commands: Vec<Command>,
+    chunk_mesh_cache: HashMap<ChunkPos, (Vec<Vertex>, Vec<u32>)>,
 }
 
 impl Game {
@@ -18,12 +23,13 @@ impl Game {
             world: World::new(),
             player: Player::new(),
             commands: Vec::new(),
+            chunk_mesh_cache: HashMap::new(),
         }
     }
 
     pub fn look_delta(&mut self, dx: f32, dy: f32) {
         // dy invertieren fühlt sich natürlicher an
-        self.player.add_look(dx, dy);
+        self.player.add_look(dx, -dy);
     }
 
     pub fn apply_movement(&mut self, input: InputState) {
@@ -258,7 +264,7 @@ impl Game {
     pub fn highest_solid_in_column(&self, x: i32, z: i32) -> Option<Block> {
         let size = self.world.size();
         for y in (0..size).rev() {
-            if let Some(b) = self.world.get_block(x, y, z) {
+            if let Some(b) = self.world.get_block_opt(x, y, z) {
                 if b != Block::Air {
                     return Some(b);
                 }
@@ -283,6 +289,43 @@ impl Game {
             .raycast_first_solid(sx, sy, sz, dx, dy, dz, 20.0)
             .map(|(x, y, z, _b, _n)| (x, y, z))
     }
+   
+    pub fn mesh_loaded_chunks_if_dirty(&mut self) -> Option<(Vec<Vertex>, Vec<u32>)> {
+        let cps = self.world.chunk_positions();
+
+        // Nur dirty Chunks neu meshen (oder wenn noch nicht im Cache)
+        let mut any_changed = false;
+
+        for &cp in &cps {
+            let was_dirty = self.world.take_chunk_dirty(cp);
+            let missing = !self.chunk_mesh_cache.contains_key(&cp);
+
+            if was_dirty || missing {
+                let (v, i) = mesh_chunk(&self.world, cp);
+                self.chunk_mesh_cache.insert(cp, (v, i));
+                any_changed = true;
+            }
+        }
+
+        if !any_changed {
+            return None;
+        }
+
+        // Aus Cache ein großes Mesh bauen
+        let mut verts: Vec<Vertex> = Vec::new();
+        let mut inds: Vec<u32> = Vec::new();
+
+        for cp in cps {
+            if let Some((v, i)) = self.chunk_mesh_cache.get(&cp) {
+                let base = verts.len() as u32;
+                verts.extend_from_slice(v);
+                inds.extend(i.iter().map(|idx| idx + base));
+            }
+        }
+
+        Some((verts, inds))
+    }
+
     pub fn camera_pos_dir(&self) -> ((f32, f32, f32), (f32, f32, f32)) {
         (self.player.eye_pos(), self.player.dir())
     }

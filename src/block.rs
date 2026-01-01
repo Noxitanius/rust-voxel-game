@@ -4,3 +4,9 @@ pub enum Block {
     Dirt,
     Stone,
 }
+
+impl Default for Block {
+    fn default() -> Self {
+        Block::Air
+    }
+}

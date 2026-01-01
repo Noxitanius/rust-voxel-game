@@ -1,40 +1,51 @@
+use std::collections::HashMap;
+
 use crate::block::Block;
+use crate::chunk::{CHUNK_SIZE, Chunk, ChunkPos, chunk_coord, in_chunk};
 
 pub struct World {
     age_ticks: u64,
-
-    // Mini-Welt: 16×16×16
-    size: i32,
-    blocks: Vec<Block>,
+    chunks: HashMap<ChunkPos, Chunk<Block>>,
 }
 
 impl World {
     pub fn new() -> Self {
-        let size = 16;
-        let total = (size * size * size) as usize;
-
-        let mut blocks = vec![Block::Air; total];
-
-        // Bodenplatte aus Dirt bei y=0
-        for z in 0..size {
-            for x in 0..size {
-                let idx = Self::index(size, x, 0, z);
-                blocks[idx] = Block::Dirt;
-            }
-        }
-
-        // Test: kleine Wand aus Stone bei z=8, x=3..5, y=1..3
-        for y in 1..=3 {
-            for x in 3..=5 {
-                let idx = Self::index(size, x, y, 8);
-                blocks[idx] = Block::Stone;
-            }
-        }
-
-        Self {
+        let mut w = Self {
             age_ticks: 0,
-            size,
-            blocks,
+            chunks: HashMap::new(),
+        };
+
+        // Startbereich: Bodenplatte + kleine Wand wie vorher (nur größer, chunk-safe)
+        w.ensure_spawn_area();
+        w
+    }
+
+    pub fn size(&self) -> i32 {
+        // Alte API: Mini-Welt war 16. Für jetzt als "default".
+        // Kann später raus, wenn Game keine size mehr braucht.
+        16
+    }
+
+    pub fn get_block_opt(&self, x: i32, y: i32, z: i32) -> Option<Block> {
+        // Alte API: Out-of-bounds = None
+        // Neue Chunk-Welt ist "unbounded", also immer Some(...)
+        Some(self.get_block(x, y, z))
+    }
+
+    fn mark_dirty(&mut self, cp: ChunkPos) {
+        if let Some(ch) = self.chunks.get_mut(&cp) {
+            ch.dirty = true;
+        }
+    }
+
+    /// Gibt zurück, ob der Chunk 'dirty' war, und setzt dirty=false.
+    pub fn take_chunk_dirty(&mut self, cp: ChunkPos) -> bool {
+        if let Some(ch) = self.chunks.get_mut(&cp) {
+            let was = ch.dirty;
+            ch.dirty = false;
+            was
+        } else {
+            false
         }
     }
 
@@ -46,24 +57,72 @@ impl World {
         self.age_ticks
     }
 
-    pub fn size(&self) -> i32 {
-        self.size
+    /// Optional: Debug/Info – Anzahl geladener Chunks
+    pub fn chunk_count(&self) -> usize {
+        self.chunks.len()
     }
 
-    pub fn get_block(&self, x: i32, y: i32, z: i32) -> Option<Block> {
-        if !Self::in_bounds(self.size, x, y, z) {
-            return None;
+    pub fn chunk_positions(&self) -> Vec<ChunkPos> {
+        self.chunks.keys().copied().collect()
+    }
+
+    fn get_or_create_chunk(&mut self, pos: ChunkPos) -> &mut Chunk<Block> {
+        self.chunks.entry(pos).or_insert_with(|| Chunk::new(pos))
+    }
+
+    pub fn get_block(&self, x: i32, y: i32, z: i32) -> Block {
+        let cp = ChunkPos {
+            cx: chunk_coord(x),
+            cy: chunk_coord(y),
+            cz: chunk_coord(z),
+        };
+
+        let lx = in_chunk(x);
+        let ly = in_chunk(y);
+        let lz = in_chunk(z);
+
+        match self.chunks.get(&cp) {
+            Some(ch) => ch.get_local(lx, ly, lz),
+            None => Block::Air,
         }
-        let idx = Self::index(self.size, x, y, z);
-        Some(self.blocks[idx])
     }
 
     pub fn set_block(&mut self, x: i32, y: i32, z: i32, b: Block) -> bool {
-        if !Self::in_bounds(self.size, x, y, z) {
-            return false;
+        let cx = chunk_coord(x);
+        let cy = chunk_coord(y);
+        let cz = chunk_coord(z);
+
+        let lx = in_chunk(x);
+        let ly = in_chunk(y);
+        let lz = in_chunk(z);
+
+        let cp = ChunkPos { cx, cy, cz };
+
+        // Chunk anlegen + setzen (setzt dirty ohnehin)
+        {
+            let ch = self.get_or_create_chunk(cp);
+            ch.set_local(lx, ly, lz, b);
         }
-        let idx = Self::index(self.size, x, y, z);
-        self.blocks[idx] = b;
+
+        // Wenn an einer Chunk-Kante geändert wurde, Nachbar-Chunk ebenfalls dirty
+        if lx == 0 {
+            self.mark_dirty(ChunkPos { cx: cx - 1, cy, cz });
+        } else if lx == CHUNK_SIZE - 1 {
+            self.mark_dirty(ChunkPos { cx: cx + 1, cy, cz });
+        }
+
+        if ly == 0 {
+            self.mark_dirty(ChunkPos { cx, cy: cy - 1, cz });
+        } else if ly == CHUNK_SIZE - 1 {
+            self.mark_dirty(ChunkPos { cx, cy: cy + 1, cz });
+        }
+
+        if lz == 0 {
+            self.mark_dirty(ChunkPos { cx, cy, cz: cz - 1 });
+        } else if lz == CHUNK_SIZE - 1 {
+            self.mark_dirty(ChunkPos { cx, cy, cz: cz + 1 });
+        }
+
         true
     }
 
@@ -76,19 +135,27 @@ impl World {
     }
 
     pub fn is_solid(&self, x: i32, y: i32, z: i32) -> bool {
-        match self.get_block(x, y, z) {
-            Some(Block::Air) | None => false,
-            Some(_) => true, // Dirt, Stone, ...
+        self.get_block(x, y, z) != Block::Air
+    }
+
+    pub fn ensure_spawn_area(&mut self) {
+        // Ein Feld von 64x64 auf y=0 als Dirt
+        for x in 0..64 {
+            for z in 0..64 {
+                self.set_block(x, 0, z, Block::Dirt);
+            }
         }
-    }
 
-    fn in_bounds(size: i32, x: i32, y: i32, z: i32) -> bool {
-        x >= 0 && x < size && y >= 0 && y < size && z >= 0 && z < size
-    }
+        // Test-Wand wie vorher (z=8, x=3..5, y=1..3)
+        for y in 1..=3 {
+            for x in 3..=5 {
+                self.set_block(x, y, 8, Block::Stone);
+            }
+        }
 
-    fn index(size: i32, x: i32, y: i32, z: i32) -> usize {
-        // x + size*(y + size*z)
-        (x + size * (y + size * z)) as usize
+        // Optional: ein paar Chunks "anlegen", damit HashMap schon gefüllt ist
+        // (nicht notwendig, aber manchmal hilfreich beim Debuggen)
+        let _ = CHUNK_SIZE; // nur, damit Import nicht als "unused" gilt, falls du’s nicht nutzt
     }
 
     pub fn raycast_first_solid(
@@ -187,12 +254,9 @@ impl World {
         let mut hit_normal = (0, 0, 0);
 
         // Start-Block prüfen
-        if let Some(b) = self.get_block(vx, vy, vz) {
-            if b != Block::Air {
-                return Some((vx, vy, vz, b, (0, 0, 0)));
-            }
-        } else {
-            return None;
+        let b0 = self.get_block(vx, vy, vz);
+        if b0 != Block::Air {
+            return Some((vx, vy, vz, b0, (0, 0, 0)));
         }
 
         while t <= max_dist {
@@ -213,11 +277,7 @@ impl World {
                 hit_normal = (0, 0, -step_z);
             }
 
-            let b = match self.get_block(vx, vy, vz) {
-                Some(b) => b,
-                None => return None,
-            };
-
+            let b = self.get_block(vx, vy, vz);
             if b != Block::Air {
                 return Some((vx, vy, vz, b, hit_normal));
             }

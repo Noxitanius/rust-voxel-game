@@ -1,41 +1,13 @@
 use std::sync::Arc;
 
+use crate::mesh::Vertex;
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
 use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct Vertex {
-    pos: [f32; 3],
-    color: [f32; 3],
-}
-
-impl Vertex {
-    fn layout() -> wgpu::VertexBufferLayout<'static> {
-        use std::mem;
-        wgpu::VertexBufferLayout {
-            array_stride: mem::size_of::<Vertex>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
-                    shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-            ],
-        }
-    }
-}
-
-fn cube_mesh() -> (Vec<Vertex>, Vec<u16>) {
+fn cube_mesh() -> (Vec<Vertex>, Vec<u32>) {
     let v = vec![
         Vertex {
             pos: [-1.0, -1.0, 1.0],
@@ -71,7 +43,7 @@ fn cube_mesh() -> (Vec<Vertex>, Vec<u16>) {
         }, // 7
     ];
 
-    let i: Vec<u16> = vec![
+    let i: Vec<u32> = vec![
         0, 1, 2, 0, 2, 3, // front
         1, 5, 6, 1, 6, 2, // right
         5, 4, 7, 5, 7, 6, // back
@@ -148,8 +120,8 @@ pub struct Gfx {
 
     pipeline: wgpu::RenderPipeline,
 
-    vertex_buf: wgpu::Buffer,
-    index_buf: wgpu::Buffer,
+    vertex_buf: Option<wgpu::Buffer>,
+    index_buf: Option<wgpu::Buffer>,
     index_count: u32,
 
     camera_buf: wgpu::Buffer,
@@ -330,8 +302,8 @@ impl Gfx {
             queue,
             config,
             pipeline,
-            vertex_buf,
-            index_buf,
+            vertex_buf: Some(vertex_buf),
+            index_buf: Some(index_buf),
             index_count,
             camera_buf,
             camera_bg,
@@ -384,6 +356,28 @@ impl Gfx {
             .write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&cam_u));
     }
 
+    pub fn set_mesh(&mut self, vertices: &[Vertex], indices: &[u32]) {
+        let vb = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("dynamic vertex buffer"),
+                contents: bytemuck::cast_slice(vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+
+        let ib = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("dynamic index buffer"),
+                contents: bytemuck::cast_slice(indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+        self.vertex_buf = Some(vb);
+        self.index_buf = Some(ib);
+        self.index_count = indices.len() as u32;
+    }
+
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         eprintln!("RENDER");
 
@@ -430,9 +424,11 @@ impl Gfx {
 
             rp.set_pipeline(&self.pipeline);
             rp.set_bind_group(0, &self.camera_bg, &[]);
-            rp.set_vertex_buffer(0, self.vertex_buf.slice(..));
-            rp.set_index_buffer(self.index_buf.slice(..), wgpu::IndexFormat::Uint16);
-            rp.draw_indexed(0..self.index_count, 0, 0..1);
+            if let (Some(vb), Some(ib)) = (&self.vertex_buf, &self.index_buf) {
+                rp.set_vertex_buffer(0, vb.slice(..));
+                rp.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                rp.draw_indexed(0..self.index_count, 0, 0..1);
+            }
         }
 
         self.queue.submit(Some(encoder.finish()));

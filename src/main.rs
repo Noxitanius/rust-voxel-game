@@ -1,9 +1,12 @@
 mod block;
+mod chunk;
 mod command;
 mod game;
 mod gfx;
 mod input;
+mod mesh;
 mod player;
+mod voxel_mesher;
 mod world;
 
 use std::sync::Arc;
@@ -120,6 +123,10 @@ fn main() {
 
                         let (pos, dir) = game.camera_pos_dir();
                         gfx.set_camera(pos, dir);
+
+                        if let Some((verts, inds)) = game.mesh_loaded_chunks_if_dirty() {
+                            gfx.set_mesh(&verts, &inds);
+                        }
 
                         window.request_redraw();
                     }
