@@ -124,7 +124,12 @@ fn main() {
                         let (pos, dir) = game.camera_pos_dir();
                         gfx.set_camera(pos, dir);
 
-                        if let Some((verts, inds)) = game.mesh_loaded_chunks_if_dirty() {
+                        // Chunk-Streaming: einfacher Radius um den Spieler
+                        game.maintain_chunk_window(4);
+
+                        if let Some((verts, inds)) =
+                            game.mesh_loaded_chunks_if_dirty(gfx.size.width, gfx.size.height)
+                        {
                             gfx.set_mesh(&verts, &inds);
                         }
 

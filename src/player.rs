@@ -38,7 +38,7 @@ impl Player {
 
         // Vorwärtsrichtung
         let dx = sy * cp;
-        let dy = -sp;
+        let dy = sp;
         let dz = cy * cp;
 
         (dx, dy, dz)

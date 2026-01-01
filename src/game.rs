@@ -1,12 +1,16 @@
 use crate::block::Block;
-use crate::chunk::ChunkPos;
+use crate::chunk::{chunk_coord, ChunkPos, CHUNK_SIZE};
 use crate::command::Command;
 use crate::input::InputState;
 use crate::mesh::Vertex;
 use crate::player::Player;
 use crate::voxel_mesher::mesh_chunk;
 use crate::world::World;
+use glam::Vec3;
 use std::collections::HashMap;
+
+const CAMERA_FOV_Y: f32 = 45.0_f32.to_radians();
+const CAMERA_FAR: f32 = 200.0;
 
 pub struct Game {
     tick: u64,
@@ -28,8 +32,8 @@ impl Game {
     }
 
     pub fn look_delta(&mut self, dx: f32, dy: f32) {
-        // dy invertieren fühlt sich natürlicher an
-        self.player.add_look(dx, -dy);
+        // native Mausbewegung (kein invert)
+        self.player.add_look(dx, dy);
     }
 
     pub fn apply_movement(&mut self, input: InputState) {
@@ -290,7 +294,57 @@ impl Game {
             .map(|(x, y, z, _b, _n)| (x, y, z))
     }
 
-    pub fn mesh_loaded_chunks_if_dirty(&mut self) -> Option<(Vec<Vertex>, Vec<u32>)> {
+    pub fn unload_chunk(&mut self, pos: ChunkPos) -> bool {
+        let removed = self.world.unload_chunk(pos);
+        if removed {
+            self.chunk_mesh_cache.remove(&pos);
+        }
+        removed
+    }
+
+    pub fn maintain_chunk_window(&mut self, radius: i32) {
+        // Spieler-Chunk
+        let player_chunk = ChunkPos {
+            cx: chunk_coord(self.player.x.floor() as i32),
+            cy: chunk_coord(self.player.y.floor() as i32),
+            cz: chunk_coord(self.player.z.floor() as i32),
+        };
+
+        // 1) Alle Chunks im Radius (nur XZ) sicherstellen, Y-Ebene des Spielers
+        for dx in -radius..=radius {
+            for dz in -radius..=radius {
+                let cp = ChunkPos {
+                    cx: player_chunk.cx + dx,
+                    cy: player_chunk.cy,
+                    cz: player_chunk.cz + dz,
+                };
+                self.world.ensure_chunk(cp);
+            }
+        }
+
+        // 2) Außerhalb entladen (nur XZ-Entfernung)
+        let keep_sq = radius * radius;
+        let to_unload: Vec<ChunkPos> = self
+            .world
+            .chunk_positions()
+            .into_iter()
+            .filter(|cp| {
+                let dx = cp.cx - player_chunk.cx;
+                let dz = cp.cz - player_chunk.cz;
+                dx * dx + dz * dz > keep_sq || cp.cy != player_chunk.cy
+            })
+            .collect();
+
+        for cp in to_unload {
+            self.unload_chunk(cp);
+        }
+    }
+
+    pub fn mesh_loaded_chunks_if_dirty(
+        &mut self,
+        screen_width: u32,
+        screen_height: u32,
+    ) -> Option<(Vec<Vertex>, Vec<u32>)> {
         let cps = self.world.chunk_positions();
 
         // 1) Dirty Chunks neu meshen (oder wenn noch nicht im Cache)
@@ -301,29 +355,60 @@ impl Game {
             let missing = !self.chunk_mesh_cache.contains_key(&cp);
 
             if was_dirty || missing {
+                if missing {
+                    // neuer Chunk -> Nachbarn neu meshen lassen, damit Grenz-Faces verschwinden
+                    const NEIGHBORS: [(i32, i32, i32); 6] = [
+                        (1, 0, 0),
+                        (-1, 0, 0),
+                        (0, 1, 0),
+                        (0, -1, 0),
+                        (0, 0, 1),
+                        (0, 0, -1),
+                    ];
+                    for (dx, dy, dz) in NEIGHBORS {
+                        self.world.mark_dirty(ChunkPos {
+                            cx: cp.cx + dx,
+                            cy: cp.cy + dy,
+                            cz: cp.cz + dz,
+                        });
+                    }
+                }
+
                 let (v, i) = mesh_chunk(&self.world, cp);
                 self.chunk_mesh_cache.insert(cp, (v, i));
                 any_changed = true;
             }
         }
 
-        // Optional: Cache aufräumen, falls Chunks entfernt werden (bei dir aktuell nicht)
-        // self.chunk_mesh_cache.retain(|cp, _| self.world.has_chunk(*cp));
+        // Cache aufraeumen: Meshes zu entladenen Chunks entfernen
+        self.chunk_mesh_cache
+            .retain(|cp, _| self.world.has_chunk(*cp));
 
         if !any_changed {
             return None;
         }
 
-        // 2) Aus Cache ein Gesamtmesh bauen
+        // 2) Aus Cache ein Gesamtmesh bauen (Chunk-FOV-Culling)
+        let aspect = (screen_width.max(1) as f32) / (screen_height.max(1) as f32);
+        let cam_pos = vec3_from(self.player.eye_pos());
+        let cam_dir = vec3_from(self.player.dir()).normalize_or_zero();
+
         let mut verts: Vec<Vertex> = Vec::new();
         let mut inds: Vec<u32> = Vec::new();
 
         for cp in cps {
+            if !chunk_in_frustum(cp, cam_pos, cam_dir, aspect) {
+                continue;
+            }
             if let Some((v, i)) = self.chunk_mesh_cache.get(&cp) {
                 let base = verts.len() as u32;
                 verts.extend_from_slice(v);
                 inds.extend(i.iter().map(|idx| idx + base));
             }
+        }
+
+        if inds.is_empty() || verts.is_empty() {
+            return Some((Vec::new(), Vec::new())); // signalisiert leeres Mesh zum Zurücksetzen
         }
 
         Some((verts, inds))
@@ -332,4 +417,77 @@ impl Game {
     pub fn camera_pos_dir(&self) -> ((f32, f32, f32), (f32, f32, f32)) {
         (self.player.eye_pos(), self.player.dir())
     }
+}
+
+#[inline]
+fn vec3_from(t: (f32, f32, f32)) -> Vec3 {
+    Vec3::new(t.0, t.1, t.2)
+}
+
+fn chunk_bounds(cp: ChunkPos) -> (Vec3, Vec3, Vec3, f32) {
+    let base = Vec3::new(
+        (cp.cx * CHUNK_SIZE) as f32,
+        (cp.cy * CHUNK_SIZE) as f32,
+        (cp.cz * CHUNK_SIZE) as f32,
+    );
+    let size = Vec3::splat(CHUNK_SIZE as f32);
+    let center = base + size * 0.5;
+    let radius = (size * 0.5).length() * 1.02; // kleine Reserve gegen harte Schnitte
+    (base, base + size, center, radius)
+}
+
+fn chunk_in_frustum(cp: ChunkPos, cam_pos: Vec3, cam_dir: Vec3, aspect: f32) -> bool {
+    let (_min, _max, center, radius) = chunk_bounds(cp);
+
+    // Distanz-Cull gegen Far-Plane (Gfx nutzt 200.0)
+    let to_center = center - cam_pos;
+    let dist = to_center.length();
+    if dist - radius > CAMERA_FAR {
+        return false;
+    }
+
+    // Wenn Kamera im Chunk oder sehr nah: immer sichtbar
+    if dist < radius {
+        return true;
+    }
+
+    let dir_to = to_center / dist.max(1e-6);
+
+    // FOV-Halbwinkel
+    let half_v = 0.5 * CAMERA_FOV_Y;
+    let half_h = (aspect * half_v.tan()).atan(); // tan(h/2) = aspect * tan(v/2)
+
+    // Basisachsen
+    let up = Vec3::Y;
+    let mut right = cam_dir.cross(up);
+    if right.length_squared() < 1e-5 {
+        right = Vec3::new(1.0, 0.0, 0.0); // Fallback wenn Blick senkrecht nach oben/unten
+    }
+    let right = right.normalize();
+
+    let ang_allow = (radius / dist).atan(); // erlaubt etwas Spielraum fuer Chunk-Groesse
+
+    // Horizontal (XZ)
+    let cam_forward_h = (cam_dir - up * cam_dir.dot(up)).normalize_or_zero();
+    let dir_h = (dir_to - up * dir_to.dot(up)).normalize_or_zero();
+    if cam_forward_h.length_squared() > 0.0 && dir_h.length_squared() > 0.0 {
+        let cos_h = cam_forward_h.dot(dir_h).clamp(-1.0, 1.0);
+        let ang_h = cos_h.acos();
+        if ang_h > half_h + ang_allow {
+            return false;
+        }
+    }
+
+    // Vertikal (Pitch)
+    let cam_forward_v = (cam_dir - right * cam_dir.dot(right)).normalize_or_zero();
+    let dir_v = (dir_to - right * dir_to.dot(right)).normalize_or_zero();
+    if cam_forward_v.length_squared() > 0.0 && dir_v.length_squared() > 0.0 {
+        let cos_v = cam_forward_v.dot(dir_v).clamp(-1.0, 1.0);
+        let ang_v = cos_v.acos();
+        if ang_v > half_v + ang_allow {
+            return false;
+        }
+    }
+
+    true
 }

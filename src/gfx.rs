@@ -357,6 +357,14 @@ impl Gfx {
     }
 
     pub fn set_mesh(&mut self, vertices: &[Vertex], indices: &[u32]) {
+        // Schutz: leeres Mesh -> Buffer entfernen, nichts zeichnen
+        if vertices.is_empty() || indices.is_empty() {
+            self.vertex_buf = None;
+            self.index_buf = None;
+            self.index_count = 0;
+            return;
+        }
+
         let vb = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -424,10 +432,12 @@ impl Gfx {
 
             rp.set_pipeline(&self.pipeline);
             rp.set_bind_group(0, &self.camera_bg, &[]);
-            if let (Some(vb), Some(ib)) = (&self.vertex_buf, &self.index_buf) {
+            if self.index_count > 0 {
+                if let (Some(vb), Some(ib)) = (&self.vertex_buf, &self.index_buf) {
                 rp.set_vertex_buffer(0, vb.slice(..));
                 rp.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
                 rp.draw_indexed(0..self.index_count, 0, 0..1);
+            }
             }
         }
 

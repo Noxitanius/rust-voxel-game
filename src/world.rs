@@ -32,7 +32,7 @@ impl World {
         Some(self.get_block(x, y, z))
     }
 
-    fn mark_dirty(&mut self, cp: ChunkPos) {
+    pub fn mark_dirty(&mut self, cp: ChunkPos) {
         if let Some(ch) = self.chunks.get_mut(&cp) {
             ch.dirty = true;
         }
@@ -64,6 +64,14 @@ impl World {
 
     pub fn chunk_positions(&self) -> Vec<ChunkPos> {
         self.chunks.keys().copied().collect()
+    }
+
+    pub fn has_chunk(&self, pos: ChunkPos) -> bool {
+        self.chunks.contains_key(&pos)
+    }
+
+    pub fn unload_chunk(&mut self, pos: ChunkPos) -> bool {
+        self.chunks.remove(&pos).is_some()
     }
 
     fn get_or_create_chunk(&mut self, pos: ChunkPos) -> &mut Chunk<Block> {
@@ -136,6 +144,11 @@ impl World {
 
     pub fn is_solid(&self, x: i32, y: i32, z: i32) -> bool {
         self.get_block(x, y, z) != Block::Air
+    }
+
+    /// Stellt sicher, dass ein Chunk existiert. Nützlich für Streaming/Preload.
+    pub fn ensure_chunk(&mut self, pos: ChunkPos) {
+        let _ = self.get_or_create_chunk(pos);
     }
 
     pub fn ensure_spawn_area(&mut self) {
