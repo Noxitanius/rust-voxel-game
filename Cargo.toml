@@ -1,0 +1,12 @@
+[package]
+name = "rust_game"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+winit = "0.29"
+pixels = "0.15"
+
+[[bin]]
+name = "rust_game"
+path = "src/main.rs"
